@@ -1,8 +1,7 @@
 import cv2
 import numpy as np
 import sys
-from concurrent.futures import ThreadPoolExecutor
-import math
+
 # progress_bar
 def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█'):
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
@@ -12,50 +11,65 @@ def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, lengt
     sys.stdout.flush()
     if iteration == total:
         sys.stdout.write('\n')
+def bilateral_filter(img, diameter, sigma_color, sigma_space,channel_id):
+    # Convert the input image to float32
+    img = np.float32(img)
 
-
-def bilateral_filter(L, diameter, sigma_color, sigma_space):
-    output = np.zeros_like(L)
+    # Compute the spatial kernel
     radius = diameter // 2
-    L= np.divide(L,255)
-    for i in range(radius,L.shape[0]-radius):
-        for j in range(radius,L.shape[1]-radius):
-            pixel_value = 0.0
-            weight_sum = 0.0
-            for k in range(i - radius, i + radius + 1):
-                for l in range(j - radius, j + radius + 1):
-                    # 计算空间距离
-                    spatial_distance = pow((i - k),2) + pow((j - l),2)
+    spatial_kernel = np.zeros((diameter, diameter))
+    for i in range(diameter):
+        for j in range(diameter):
+            spatial_distance = np.sqrt((i - radius) ** 2 + (j - radius) ** 2)
+            spatial_kernel[i, j] = np.exp(-np.square(spatial_distance) / (2 * np.square(sigma_space)))
 
-                    # 计算颜色距离
-                    color_distance =pow((L[i, j] - L[k, l]),2)
+    # Initialize the output image
+    output = np.zeros_like(img)
+    H=img.shape[0]
+    W=img.shape[1]
+    # Iterate over each pixel in the input image
+    for i in range(radius, H - radius):
+        for j in range(radius, W - radius):
+            # Extract the local patch around the current pixel
+            patch = img[i - radius:i + radius + 1, j - radius:j + radius + 1]
 
-                    # 计算权重
-                    weight = np.exp(-spatial_distance/ (2 * sigma_space ** 2))
-                    weight *= np.exp(-color_distance / (2 * sigma_color ** 2))
+            # Compute the range kernel using the patch and the current pixel
+            range_kernel = np.exp(-np.square(patch - img[i, j]) / (2 * np.square(sigma_color)))
 
-                    # 累加像素值和权重
-                    pixel_value += weight * L[k, l]
-                    weight_sum += weight
-            output[i, j] = pixel_value / weight_sum
-            print_progress_bar((i-25)*(L.shape[1]-diameter)+(j-25)+1,(L.shape[1]-diameter)*(L.shape[0]-diameter),"start","complete")
-    output=np.uint8(np.multiply(output,255))
+            # Compute the fast bilateral filter response
+            fast_bilateral_filter = spatial_kernel * range_kernel
+            normalization_factor = np.sum(fast_bilateral_filter)
+            output[i, j] = np.sum(fast_bilateral_filter * patch) / normalization_factor
+            print_progress_bar(channel_id*(H-diameter)*(W-diameter)+(i-radius)*(W-diameter)+(j-radius)+1,(H-diameter)*(W-diameter)*3,"start","complete")
+
+    # Convert the output image back to uint8
+    output = np.uint8(np.clip(output, 0, 255))
+
     return output
 
+def bilateral_filter_color(img, diameter, sigma_color, sigma_space):
+    # Split the input image into its color channels
+    b, g, r = cv2.split(img)
+
+    # Apply the fast bilateral filter to each color channel
+    b_filtered = bilateral_filter(b, diameter, sigma_color, sigma_space,channel_id=0)
+    g_filtered = bilateral_filter(g, diameter, sigma_color, sigma_space,channel_id=1)
+    r_filtered = bilateral_filter(r, diameter, sigma_color, sigma_space,channel_id=2)
+
+    # Merge the filtered color channels back into a color image
+    output = cv2.merge((b_filtered, g_filtered, r_filtered))
+
+    return output
 if __name__=="__main__":
-    diameter = 50
-    input = cv2.imread("data\\lamp\\lamp_ambient.tif",cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
-    input=cv2.resize(input,[200,200])
-    input = cv2.cvtColor(input,cv2.COLOR_LBGR2Lab)
-    L=input[:,:,0]
-    a=input[:,:,1]
-    b=input[:,:,2]
+    # Load the input image
+    img = cv2.imread('data\\lamp\\lamp_ambient.tif')
+    # Set the filter parameters
+    diameter = 15
     SPACE_K_LIST=[5,10,20,30,40,50,60]
     INTENSITY_K_LIST=[0.05,0.10,0.15,0.20,0.25]
     for sigma_space in SPACE_K_LIST:
         for sigma_color in INTENSITY_K_LIST:
-            Bilateral_L = bilateral_filter(L, diameter, sigma_color, sigma_space)
-            #Bilateral_L = cv2.bilateralFilter(L, diameter, sigma_color, sigma_space)
-            Bilateral_IMG=cv2.cvtColor(cv2.merge([Bilateral_L,a,b]), cv2.COLOR_Lab2BGR)
-            savename="data\\lamp\\Bilater_flitering\\"+"bilateral_space"+str(sigma_space)+"_intensity"+str(sigma_color).split(".")[1]+".tif"
-            cv2.imwrite(savename, Bilateral_IMG, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
+            print("bilater filter by sigma_space:"+str(sigma_space)+" sigma_color:"+str(sigma_color))
+            output = bilateral_filter_color(img, diameter, sigma_color, sigma_space)
+            savename="data\\lamp\\Bilater_flitering\\"+"bilateral_space"+str(sigma_space)+"_intensity"+str(sigma_color).split(".")[1]+".jpg"
+            cv2.imwrite(savename, output)
